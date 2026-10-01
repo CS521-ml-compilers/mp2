@@ -16,18 +16,43 @@ Overall, this assignment will:
 
 ## Environment Setup ##
 
-You will be programming and testing your code on an AWS VM featuring Trainium accelerators. Please follow the instructions in [cloud_readme.md](../cloud_readme.md) for setting up a machine to run the assignment.
+### Trainium setup: coming soon
 
-Once you have logged in to your AWS machine, you should download the assignment starter code from the course Github using:
+The final version of your kernel will run on an AWS `trn2.3xlarge` instance, which has a Trainium2 accelerator attached. Our AWS allocation for the course is not ready yet. Once it is, we will post the Trainium setup instructions here. Until then, develop and test your kernel with the NKI simulator on your own machine, as described below.
 
-`git clone https://github.com/CS521-ml-compilers/mp2.git`
+### Installing the simulator
 
-After downloading the MP 2 repository, move to the `npu` directory and **run the install script we have provided**:
+The NKI simulator runs your kernel on an ordinary CPU and checks its output, so you can get a correct kernel working before you have Trainium access. It does not measure performance: the performance tests and `neuron-profile` need the Trainium instance.
+
+The simulator is part of the Neuron compiler package, `neuronx-cc`, which is only published for Linux on x86-64. The install script uses version 2.22, from Neuron SDK 2.27, which needs Python 3.10, 3.11, or 3.12. On Windows, use WSL2. On macOS, use Google Colab or a Linux machine.
+
+Download the starter code and **run the simulator install script we have provided** from the `npu` directory:
 ```
-cd npu
-source install.sh
+git clone https://github.com/CS521-ml-compilers/mp2.git
+cd mp2/npu
+bash install_simulator.sh
 ```
-The install script will activate a Python [virtual environment](https://builtin.com/data-science/python-virtual-environment) with all the needed assignment dependencies. It will also modify your `~/.bashrc` file so the virtual environment is activated upon future logins to your machine. Finally, the script sets up your InfluxDB credentials so that you may use `neuron-profile`.
+The script creates a Python [virtual environment](https://builtin.com/data-science/python-virtual-environment) in `~/nki-env` (set `NKI_ENV` to put it somewhere else), installs the Neuron compiler and a CPU build of PyTorch, which the test harness uses for its reference output, and then checks that the simulator runs. Activate the environment in every new shell:
+```
+source ~/nki-env/bin/activate
+```
+Activating it also sets `NEURON_PLATFORM_TARGET_OVERRIDE=trn2`, which makes the simulator apply the hardware rules of the Trainium2 chip in the course's instances.
+
+On Google Colab, run `!bash install_simulator.sh` from the `npu` directory instead. It installs into the notebook's Python, so there is nothing to activate, but run `%env NEURON_PLATFORM_TARGET_OVERRIDE=trn2` in the notebook to simulate the right chip. In a notebook, put a `!` in front of shell commands and use `%cd` to change directories.
+
+Do not run `install.sh` on your own machine: it is for the Trainium instance.
+
+### Running your kernel in the simulator
+
+From the `npu` directory, run the test harness with the `--simulate` flag:
+```
+python3 test_harness.py --simulate
+```
+This runs the three correctness tests (small images, large images, and large images with bias) through the simulator. After them, the harness moves on to the performance tests, which need a real Trainium device, so in simulation mode it stops there with a Python traceback (a `KeyError`). That error is expected and does not mean your kernel is wrong; only the three correctness lines matter.
+
+If your kernel allocates on-chip tensors with block dimensions, the compiler prints `DeprecationWarning: Block dimension is deprecated` lines. A block dimension is a tensor dimension placed before the partition dimension, such as the 8 in a tensor of shape `(8, par_dim(128), 512)`; this README explains them in [Direct Allocation](#direct-allocation) and uses them in its examples. Block dimensions still work in compiler version 2.22, so you can ignore these warnings.
+
+**Which NKI API to use.** This assignment uses the NKI API in the `neuronxcc.nki` package, as the starter code does. AWS has since released a newer NKI API, imported with `import nki`, and the `latest` AWS documentation describes only that newer API. Do not mix the two. For documentation that matches this assignment, use the [Neuron SDK 2.26.1 NKI docs](https://awsdocs-neuron.readthedocs-hosted.com/en/v2.26.1/nki/api/index.html).
 
 ## Part 0: Getting familiar with Trainium, Neuron Core Architecture, and Neuron Kernel Interface
 
@@ -35,13 +60,9 @@ The install script will activate a Python [virtual environment](https://builtin.
 
 First, let's get you acquainted with Trainium.
 
-The `Trn1.2xlarge` instance used in this assignment features a single Trainium device, which comprises of two NeuronCores, as shown in image below. Each core is equipped with its own dedicated HBM (High-bandwidth memory). Each NeuronCore can be considered a standalone processing unit, which contains its own on-chip storage as well as a collection of specialized compute engines for performing 128x128 matrix operations (tensor engine), 128-wide vector operations (vector engine), etc. While each Trainium device has two NeuronCores, in this assignment we will be writing kernels that execute on a single NeuronCore.
+The `trn2.3xlarge` instance used in this assignment features a single Trainium2 device, which comprises eight NeuronCores (NeuronCore-v3) and 96 GiB of HBM (high-bandwidth memory). Each NeuronCore can be considered a standalone processing unit, which contains its own on-chip storage as well as a collection of specialized compute engines for performing 128x128 matrix operations (tensor engine), 128-wide vector operations (vector engine), etc. While each Trainium2 device has eight NeuronCores, in this assignment we will be writing kernels that execute on a single NeuronCore.
 
-<p align="center">
-  <img src="../handout/trainium_chip.png" width=40% height=40%>
-</p>
-
-More details on the four distinct compute engines that exist in a NeuronCore can be found [here](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/general/arch/neuron-hardware/neuron-core-v2.html#neuroncores-v2-arch).
+More details on the four distinct compute engines that exist in a NeuronCore can be found [here](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/about-neuron/arch/neuron-hardware/neuron-core-v3.html), and on the Trainium2 device [here](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/about-neuron/arch/neuron-hardware/trainium2.html).
 
 ### Trainium Memory Hierarchy
 
@@ -52,8 +73,8 @@ On Trainium, the memory hierarchy consists of four levels: **host memory (DRAM)*
 </p>
 
 * __Host memory__, is the memory address space of the host machine, and is external to the Trainium device. You can think of host memory on Trainium as similar to host memory in a CUDA programming environment.
-* __HBM__ is high-bandwidth memory located on the Trainium device. Moving data from host memory to HBM requires data transfer over the machine's PCIe interconnect. HBM serves as the device's primary memory, offering large storage (32 GiB). 
-* __SBUF__ is on-chip storage on the NeuronCore. In comparison, SBUF is significantly smaller than HBM (24 MiB) but offers much higher bandwidth (~20x than HBM). 
+* __HBM__ is high-bandwidth memory located on the Trainium device. Moving data from host memory to HBM requires data transfer over the machine's PCIe interconnect. HBM serves as the device's primary memory, offering large storage (96 GiB on Trainium2). 
+* __SBUF__ is on-chip storage on the NeuronCore. In comparison, SBUF is significantly smaller than HBM (28 MiB per NeuronCore on Trainium2) but offers much higher bandwidth (~20x than HBM). 
 * __PSUM__ is a small, specialized memory (2 MiB) dedicated to holding matrix multiplication results produced by the tensor engine.
 
 In Trainium, all computations require loading data from HBM into SBUF, which is accessible by all engine types. Intermediate data generated during kernel execution by the compute engines is also stored in SBUF. Once the computation is complete, the results are written back to HBM. 
@@ -319,11 +340,7 @@ def vector_add_direct_allocation(a_vec, b_vec):
 
 To get a detailed analysis of the performance of an application running on a NeuronCore, you will need to use the profiling tool for NeuronDevices: `neuron-profile`. Feel free to learn more about `neuron-profile` functionality from the [user guide](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/tools/neuron-sys-tools/neuron-profile-user-guide.html) and interesting performance metrics for NKI kernels from the [NKI performance guide](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/general/nki/nki_perf_guide.html).
 
-In order to run the profiling tool, you must make sure that you ran the install script as detailed in [Environment Setup](https://github.com/stanford-cs149/asst4-trainium/tree/main?tab=readme-ov-file#environment-setup) and that you forwarded ports 3001 and 8086 when you ssh'd into your machine. To reiterate on the latter, the command you should have ran is:
-
- `ssh -i path/to/key_name.pem ubuntu@<public_dns_name> -L 3001:localhost:3001 -L 8086:localhost:8086`
- 
-More details about why this is needed can be found in the [cloud_readme.md](https://github.com/stanford-cs149/asst4-trainium/blob/main/cloud_readme.md). 
+`neuron-profile` only runs on the Trainium instance, not in the simulator. We will explain how to set it up along with the Trainium setup instructions.
 
 ## Part 1: Implementing a Convolution Layer
 
@@ -337,7 +354,7 @@ Before you begin, we will demonstrate how to perform matrix operations on a Neur
   <img src="../handout/tensor_engine.png" width=60% height=60%>
 </p>
 
-The above image depicts the architecture of the Tensor Engine. The Tensor Engine is built around a 128x128 [systolic processing array](https://gfxcourses.stanford.edu/cs149/fall24/lecture/hwprog/slide_10) which streams matrix data input from SBUF (on-chip storage) and writes the output to PSUM (also on-chip storage). Like SBUF, PSUM is fast on-chip memory, however it is much smaller than SBUF (2MiB vs 24 MiB) and serves a dedicated purpose of storing matrix multiplication results computed by the Tensor Engine. The Tensor Engine is able to read-add-write to every address in PSUM. Therefore, PSUM is useful when executing large matrix multiplications in a tiled manner, where the results of each matrix multiply are accumulated into the same output tile. 
+The above image depicts the architecture of the Tensor Engine. The Tensor Engine is built around a 128x128 [systolic processing array](https://gfxcourses.stanford.edu/cs149/fall24/lecture/hwprog/slide_10) which streams matrix data input from SBUF (on-chip storage) and writes the output to PSUM (also on-chip storage). Like SBUF, PSUM is fast on-chip memory, however it is much smaller than SBUF (2 MiB vs 28 MiB) and serves a dedicated purpose of storing matrix multiplication results computed by the Tensor Engine. The Tensor Engine is able to read-add-write to every address in PSUM. Therefore, PSUM is useful when executing large matrix multiplications in a tiled manner, where the results of each matrix multiply are accumulated into the same output tile. 
 
 Recall that the Vector Engine has the capability to operate on SBUF tiles of size (128, 64k). However, the Tensor Engine contains unique SBUF tile size constraints which differ to that of the Vector Engine. Suppose we want the Tensor Engine to perform the matrix multiplication C = A x B, where A and B are located in SBUF, and the result C is stored in PSUM. Trainium imposes the following constraints. 
   - Matrix A - the left-hand side tile - can be no bigger than (128, 128)
@@ -513,7 +530,7 @@ Use the test harness script provided to validate your implementation. To run the
 python3 test_harness.py
 ```
 
-To debug your implementations, run the test harness with the `--simulate` flag. This wraps your implementation with a call to `nki.simulate_kernel()`: you can read more about it [here](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/general/nki/api/generated/nki.simulate_kernel.html#nki.simulate_kernel). When running in simulation mode, you can insert calls to `nki.device_print()` to print intermediate values of the device tensors. This can help identify potential bugs.
+To debug your implementations, run the test harness with the `--simulate` flag. This wraps your implementation with a call to `nki.simulate_kernel()`: you can read more about it [here](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/general/nki/api/generated/nki.simulate_kernel.html#nki.simulate_kernel). When running in simulation mode, you can insert calls to `nl.device_print()` to print intermediate values of the device tensors. This can help identify potential bugs.
 
 The test harness will run correctness tests first, and run performance checks next. A full-credit solution must achieve performance within 150% of the reference kernel while maintaining correctness. It will invoke your kernel with input tensors having data types float32 and float16: with the performance requirements for float16 being more strict. Make sure you write your kernels keeping this in mind!
 
