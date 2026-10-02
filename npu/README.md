@@ -1,4 +1,4 @@
-# Part 3: Optimizing convolution 2D on Neural Network Accelerators (40 points) #
+# Part 3: Optimizing convolution 2D on Neural Network Accelerators #
 
 ## License & Copyright ##
 
@@ -24,7 +24,7 @@ The final version of your kernel will run on an AWS `trn2.3xlarge` instance, whi
 
 The NKI simulator runs your kernel on an ordinary CPU and checks its output, so you can get a correct kernel working before you have Trainium access. It does not measure performance: the performance tests and `neuron-profile` need the Trainium instance.
 
-The simulator is part of the Neuron compiler package, `neuronx-cc`, which is only published for Linux on x86-64. The install script uses version 2.22, from Neuron SDK 2.27, which needs Python 3.10, 3.11, or 3.12. On Windows, use WSL2. On macOS, use Google Colab or a Linux machine.
+The simulator is part of the Neuron compiler package, `neuronx-cc`, which is only published for Linux on x86-64. The install script uses version 2.22, from Neuron SDK 2.27, which needs Python 3.10, 3.11, or 3.12. On Windows, use WSL2. On macOS, use the [Docker image](#macos-running-the-simulator-in-docker) described below, Google Colab, or a Linux machine.
 
 Download the starter code and **run the simulator install script we have provided** from the `npu` directory:
 ```
@@ -41,6 +41,30 @@ Activating it also sets `NEURON_PLATFORM_TARGET_OVERRIDE=trn2`, which makes the 
 On Google Colab, run `!bash install_simulator.sh` from the `npu` directory instead. It installs into the notebook's Python, so there is nothing to activate, but run `%env NEURON_PLATFORM_TARGET_OVERRIDE=trn2` in the notebook to simulate the right chip. In a notebook, put a `!` in front of shell commands and use `%cd` to change directories.
 
 Do not run `install.sh` on your own machine: it is for the Trainium instance.
+
+### macOS: running the simulator in Docker
+
+`neuronx-cc` has no macOS build, so on a Mac, run the simulator inside a Linux container. The `Dockerfile` in the `npu` directory builds an image with the simulator, PyTorch, and a copy of the starter code installed.
+
+1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start it.
+2. Build the image once, from the `npu` directory of your clone of the starter code:
+   ```
+   cd mp2/npu
+   docker build --platform linux/amd64 -t mp2-nki-sim .
+   ```
+   This downloads the compiler and PyTorch, and produces an image of about 3.5 GB.
+3. Run the tests on your own copy of the code:
+   ```
+   docker run --rm -it --platform linux/amd64 -v "$PWD":/mp2/npu mp2-nki-sim python3 test_harness.py --simulate
+   ```
+
+The `-v "$PWD":/mp2/npu` option mounts your `npu` directory into the container in place of the image's copy of the starter code. The container then runs the `conv_npu.py` you are editing on your Mac, and anything it writes lands in your directory. To get a shell in the container instead, leave off the command at the end:
+```
+docker run --rm -it --platform linux/amd64 -v "$PWD":/mp2/npu mp2-nki-sim
+```
+The image already sets `NEURON_PLATFORM_TARGET_OVERRIDE=trn2`, so there is no environment to activate.
+
+The compiler is only built for x86-64 processors. On a Mac with an Apple Silicon (M-series) chip, Docker runs the image under x86-64 emulation, so the simulator runs slower than on an x86-64 machine.
 
 ### Running your kernel in the simulator
 
