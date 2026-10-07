@@ -76,7 +76,8 @@ class ConvModel(nn.Module):
 
         # TO DO: 5) reshape output into shape (N, C_out, out_h, out_w).
 
-        out = mult.view(N, C_out, self.out_h, self.out_w)
+        mult = mult.reshape(N, self.out_h, self.out_w, C_out)
+        out = mult.permute(0, 3, 1, 2)
 
 
 
