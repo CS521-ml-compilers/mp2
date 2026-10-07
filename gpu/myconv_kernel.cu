@@ -19,9 +19,9 @@ __global__ void gemm_gpu_o4_kernel(
     int stride, int pad,
     int out_h, int out_w
 ) {
-    extern __shared__ float shmem[];  // shared memory for partial sums
+    extern __shared__ float shmem[];
     
-    // TO DO : Tiled matrix multiplication by using shmem
+    // TO DO : Tiled convolution
 }
 
 // Function for Python binding
