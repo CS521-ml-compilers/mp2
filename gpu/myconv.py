@@ -19,8 +19,8 @@ class ConvModel(nn.Module):
         # TO DO: Define static shapes here. 
 
         # Precompute output size
-        # self.out_h = ...
-        # self.out_w = ...
+        self.out_h = (H + 2 * padding - kernel_size) // stride + 1
+        self.out_w = (W + 2 * padding - kernel_size) // stride + 1
 
         self.weight = nn.Parameter(torch.randn(out_channels, in_channels, kernel_size, kernel_size))
         self.bias = nn.Parameter(torch.zeros(out_channels))
@@ -41,9 +41,20 @@ class ConvModel(nn.Module):
 
         # TO DO: Convert input (x) into shape (N, out_h*out_w, C*KH*KW). 
         # Refer to Lecture 3 for implementing this operation.
+        patches = []
+        for i in range(KH):
+            for j in range(KW):
+                patch = x_pad[:, :, i : i + out_h * S : S, j : j + out_w * S : S]
+                patches.append(patch)
+
+        patches = torch.stack(patches,dim=-1)
+
+        patches = patches.permute(0,2,3,1,4)
+
+        patches = patches.reshape(N,out_h*out_w,C*KH*KW)
+
         
-        # patches = ...
-        # return patches
+        return patches
 
     def conv2d_manual(self, x):
         N = x.shape[0]
@@ -51,20 +62,25 @@ class ConvModel(nn.Module):
         KH = KW = self.kernel_size
 
         # TO DO: 1) convert input (x) into shape (N, out_h*out_w, C*KH*KW).
-        # cols = self.im2col_manual(x) 
-        return 1         
+        cols = self.im2col_manual(x) 
+     
 
         # TO DO: 2) flatten self.weight into shape (C_out, C*KH*KW).
+        weight_flat = torch.flatten(self.weight,start_dim=1)
 
         # TO DO: 3) perform tiled matmul after required reshaping is done.
+        mult = torch.matmul(cols,weight_flat.t())
 
-        # TO DO: 4) Add bias.
+        # TO DO: 4) Add bias.'
+        mult += self.bias
 
         # TO DO: 5) reshape output into shape (N, C_out, out_h, out_w).
 
+        out = mult.view(N, C_out, self.out_h, self.out_w)
 
 
-        #return out
+
+        return out
 
     def forward(self, x):
         return self.conv2d_manual(x)
